@@ -1,13 +1,15 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
-#include <WiFiUdp.h>
 #include <ArduinoOTA.h>
 #include "RunningAverage.h"
+//#include "Dusk2Dawn.h"
 
+#include <ESP8266WiFi.h>
 //needed for WifiManager library
 #include <DNSServer.h>
-#include <ESP8266WebServer.h>
-#include <WiFiManager.h>         //https://github.com/tzapu/WiFiManager
+//#include <WiFiManager.h>         //https://github.com/tzapu/WiFiManager
+#include <ESPUI.h>
+#include "states.h"
 
 const char* ssid = "EAZHuis";
 const char* password = "HommeJan54";
@@ -23,16 +25,54 @@ const char LDR_TOBEGIN_ON = 16; //D0
 const char LDR_TOEND_ON = 14; //D5
 const char LDR_ADC = A0;//ADC0; //
 
+const int PLATFORMMAXIMUMMOVETIME = 500;
+const int SUNUPTHRESHOLD = 100;
+const int SUNMEASURESPEED = 100; //milliseconds between samples
+const int SUNFASTAVERAGE = 10;
+const int SUNSLOWAVERAGE = 20;
+
+
+
+platformState_t platformState = PLATFORM_IDLE;
+sunState_t sunState = SUN_IDLE;
+sunSensorState_t sunSensorState = SUNSENSOR_IDLE;
+platformMovingState_t platformMovingState = PLATFORM_STOPPING;
+
+int sunTimeout = 0;
+int sunMoveTime = 0;
+int sunMeasureSamples = 0;
+int sunMeasureTimeout = 0;
+
+
+RunningAverage sunToBeginAvgSlow(SUNSLOWAVERAGE);
+RunningAverage sunToEndAvgSlow(SUNSLOWAVERAGE);
+RunningAverage sunToBeginAvgFast(SUNFASTAVERAGE);
+RunningAverage sunToEndAvgFast(SUNFASTAVERAGE);
+
 int slowLoopTimeout = millis();
+int espuiLoopTimeout = millis();
 void setup() {
   pinSetup();
   Serial.begin(115200);
   Serial.println("Booting");
-  WiFiManager wifiManager;
-  wifiManager.autoConnect("SolarRoof");
+//  WiFiManager wifiManager;
+//  wifiManager.autoConnect("SolarRoof");
+  
+  WiFi.mode(WIFI_STA);
+  //WiFi.setHostname(ssid);  
+  WiFi.begin(ssid, password);
+
+    while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  
   otaSetup();
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
+  Serial.println("Server started");
+  espuiSetup();
 }
 
 
@@ -43,112 +83,160 @@ void loop() {
     platformTask();
     sunSensorTask();
     sunTask();
+    espuiTask();
   }
 }
 
-typedef enum sunstate {
-  SUN_IDLE,
-  SUN_MOVING_TOEND,
-  SUN_WAITINGFORSUNDOWN,
-  SUN_MOVING_TOBEGIN,
-  SUN_WAITINGFORSUNRISE,  
-}sunState_t;
 
-typedef enum platformstate {
-  PLATFORM_INBETWEEN,
-  PLATFORM_ATEND,
-  PLATFORM_ATBEGIN,
-  PLATFORM_IDLE,
-}platformState_t;
+void espuiTask(){
+  if (millis() - espuiLoopTimeout > 2000) {
+//    ESPUI.print("Millis:", String(millis()));
+    ESPUI.print("SunStat:",sunState_str[sunState]);
+    ESPUI.print("PfStat:",platformState_str[platformState]);
+    ESPUI.print("SMStat:",sunSensorState_str[sunSensorState]);
+    ESPUI.print("PfMov:",platformMovingState_str[platformMovingState]);
+    ESPUI.print("SlowEnd:",String(sunToBeginAvgSlow.getFastAverage()));
+    ESPUI.print("SlowBegin:",String(sunToEndAvgSlow.getFastAverage()));    
+    ESPUI.print("FastEnd:",String(sunToBeginAvgFast.getFastAverage()));
+    ESPUI.print("FastBegin:",String(sunToEndAvgFast.getFastAverage()));  
+    espuiLoopTimeout = millis();
+  }
+}
 
-platformState_t platformState = PLATFORM_IDLE;
+void moveEndCallback(Control sender, int type) {
+  switch (type) {
+  case B_DOWN:
+    movePlatform(1);
+    break;
+  case B_UP:
+    movePlatform(0);
+    break;
+  }
+}
+
+void moveBeginCallback(Control sender, int type) {
+  switch (type) {
+  case B_DOWN:
+    movePlatform(-1);
+    break;
+  case B_UP:
+    movePlatform(0);
+    break;
+  }
+}
+
+void movePlatform(int dir){
+  
+  if(dir==-1){
+    if(platformState != PLATFORM_ATBEGIN){
+      platformMovingState = PLATFORM_MOVINGTOBEGIN;
+      digitalWrite(MOTOR_D,0);
+      digitalWrite(MOTOR_C,1);
+      digitalWrite(MOTOR_ENA,1);
+      Serial.println("mov beg");
+    }
+  }else if(dir==1){
+    if(platformState != PLATFORM_ATEND){
+      platformMovingState = PLATFORM_MOVINGTOEND;
+      digitalWrite(MOTOR_C,0);
+      digitalWrite(MOTOR_D,1);
+      digitalWrite(MOTOR_ENA,1);    
+      Serial.println("mov end");
+    }
+  }else{
+    platformMovingState = PLATFORM_STOPPING;
+    digitalWrite(MOTOR_ENA,0);
+    Serial.println("stopping");
+  }
+  
+}
+
+
+
+void espuiSetup(){
+  ESPUI.label("SunStat:", COLOR_TURQUOISE, "IDLE");
+  ESPUI.label("SMStat:", COLOR_EMERALD, "0");
+  ESPUI.label("PfStat:", COLOR_WETASPHALT,"IDLE");
+  ESPUI.label("PfMov:", COLOR_WETASPHALT,"IDLE");
+  ESPUI.label("SlowEnd:", COLOR_SUNFLOWER,"0");
+  ESPUI.label("SlowBegin:", COLOR_CARROT,"0");
+  ESPUI.label("FastEnd:", COLOR_SUNFLOWER,"0");
+  ESPUI.label("FastBegin:", COLOR_CARROT,"0");
+  ESPUI.button("MoveToBegin", &moveBeginCallback, COLOR_PETERRIVER);
+  ESPUI.button("MoveToEnd", &moveEndCallback, COLOR_PETERRIVER);
+  ESPUI.begin("ESP32 Control");
+}
+
+
+
 
 void platformTask(){
-  if(!digitalRead(BEGINSTOP_PIN){
+  int oldPlatformState = platformState;
+  if(!digitalRead(BEGINSTOP_PIN)){
     platformState = PLATFORM_ATBEGIN;
-  }else if(!digitalRead(ENDSTOP_PIN){
+  }else if(!digitalRead(ENDSTOP_PIN)){
     platformState = PLATFORM_ATEND;
   }else{
     platformState = PLATFORM_INBETWEEN;
   }
+  if(platformState == PLATFORM_ATBEGIN && platformMovingState == PLATFORM_MOVINGTOBEGIN){
+    movePlatform(0);
+  }else if(platformState == PLATFORM_ATEND && platformMovingState == PLATFORM_MOVINGTOEND){
+    movePlatform(0);
+  }
 }
 
-sunState_t sunState = SUN_IDLE;
-int sunTimeout = 0;
-int sunMoveTime = 0;
-const int PLATFORMMAXIMUMMOVETIME = 500;
-const int SUNUPTHRESHOLD = 100;
 
 void sunTask(){
   switch(sunState){
     case SUN_IDLE:
       if(platformState==PLATFORM_ATEND){
-        if(sunToBeginAvgSlow.getAverage()<SUNUPTHRESHOLD){
+        if(sunToBeginAvgSlow.getFastAverage()<SUNUPTHRESHOLD){
         sunState = SUN_WAITINGFORSUNDOWN;
         }else{
           sunState = SUN_MOVING_TOBEGIN;
         }
       }else if(platformState==PLATFORM_ATBEGIN){
-        if(sunToBeginAvgSlow.getAverage()<SUNUPTHRESHOLD){
+        if(sunToBeginAvgSlow.getFastAverage()<SUNUPTHRESHOLD){
         sunState = SUN_MOVING_TOEND;
         }else{
           sunState = SUN_WAITINGFORSUNRISE;
         }        
-      }else(
-        if(sunToBeginAvgSlow.getAverage()<SUNUPTHRESHOLD){
-          if(sunToBeginAvgSlow.getAverage()>sunToEndAvgSlow.getAverage()){
-            sunState = SUN_MOVING_TOBEGINNING;
+      }else{
+        if(sunToBeginAvgSlow.getFastAverage()<SUNUPTHRESHOLD){
+          if(sunToBeginAvgSlow.getFastAverage()>sunToEndAvgSlow.getFastAverage()){
+            sunState = SUN_MOVING_TOBEGIN;
           }else{
             sunState = SUN_MOVING_TOEND;
-        }else{
-          sunState = SUN_MOVING_TOBEGINNING;
+          }
+         }else{
+          sunState = SUN_MOVING_TOBEGIN;
         }            
       }
-      
-  }
+    }  
 }
-
-const int SUNMEASURESPEED = 100; //milliseconds between samples
-const int SUNFASTAVERAGE = 10;
-const int SUNSLOWAVERAGE = 20;
-RunningAverage sunToBeginAvgSlow(SUNSLOWAVERAGE);
-RunningAverage sunToEndAvgSlow(SUNSLOWAVERAGE);
-RunningAverage sunToBeginAvgFast(SUNFASTAVERAGE);
-RunningAverage sunToEndAvgFast(SUNFASTAVERAGE);
-int sunMeasureSamples = 0;
-int sunMeasureTimeout = 0;
-
-typedef enum sunsensorstate{
-  SUN_MEASURING_TOBEGIN,
-  SUN_MEASURING_TOEND,
-  SUN_IDLE,
-}sunSensorState_t;
-
-sunSensorState_t sunSensorState;
-
-
 
 void sunSensorTask(void){
   if(millis()-sunMeasureTimeout>SUNMEASURESPEED){
     sunMeasureTimeout += SUNMEASURESPEED;
     switch(sunSensorState){
-      case SUN_MEASURING_TOBEGIN:
+      case SUNSENSOR_MEASURING_TOBEGIN:
         sunToBeginAvgFast.addValue(analogRead(LDR_ADC));
         pinMode(LDR_TOBEGIN_ON,INPUT);
         digitalWrite(LDR_TOEND_ON,0);
-        sunSensorState = SUN_MEASURING_TOEND;      
+        sunSensorState = SUNSENSOR_MEASURING_TOEND;      
        break;
-      case SUN_MEASURING_TOEND:
+      case SUNSENSOR_MEASURING_TOEND:
         sunToEndAvgFast.addValue(analogRead(LDR_ADC));
         pinMode(LDR_TOEND_ON,INPUT);
         digitalWrite(LDR_TOBEGIN_ON,0);
-        sunSensorState = SUN_MEASURING_TOEND;      
+        sunSensorState = SUNSENSOR_MEASURING_TOEND;      
        break;
-      case SUN_IDLE:
+      case SUNSENSOR_IDLE:
         sunMeasureTimeout = millis();
         pinMode(LDR_TOEND_ON,INPUT);
         digitalWrite(LDR_TOBEGIN_ON,0);
-        senSensorState = SUN_MEASURING_TOBEGIN;
+        sunSensorState = SUNSENSOR_MEASURING_TOBEGIN;
         sunToBeginAvgFast.clear();
         sunToEndAvgFast.clear();
         sunMeasureSamples = 0;
@@ -156,8 +244,8 @@ void sunSensorTask(void){
     }
   }
   if(++sunMeasureSamples%SUNFASTAVERAGE==0){
-    sunToBeginAvgSlow.addValue(sunToBeginAvgFast.getAverage());
-    sunToEndAvgSlow.addValue(sunToEndAvgFast.getAverage());   
+    sunToBeginAvgSlow.addValue(sunToBeginAvgFast.getFastAverage());
+    sunToEndAvgSlow.addValue(sunToEndAvgFast.getFastAverage());   
   }
 }
 
