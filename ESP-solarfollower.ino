@@ -16,13 +16,13 @@ const char* password = "HommeJan54";
 
 const char RESERVED_PINS[3] = {0,2};
 const char FREE_PINS[1] = {12};
-const char ENDSTOP_PIN = 15;//D8
+const char ENDSTOP_PIN = 12;//D6
 const char BEGINSTOP_PIN = 13;//D7
-const char MOTOR_C = 5;//D1
-const char MOTOR_D = 4;//D2
-const char MOTOR_ENA = 0;//D3
-const char LDR_TOBEGIN_ON = 16; //D0
-const char LDR_TOEND_ON = 14; //D5
+const char MOTOR_C = 16;//D0
+const char MOTOR_D = 14;//D5
+const char MOTOR_ENA = 2;//D4
+const char LDR_TOBEGIN_ON = 5; //D1
+const char LDR_TOEND_ON = 4; //D2
 const char LDR_ADC = A0;//ADC0; //
 
 const int PLATFORMMAXIMUMMOVETIME = 500;
@@ -30,8 +30,6 @@ const int SUNUPTHRESHOLD = 100;
 const int SUNMEASURESPEED = 100; //milliseconds between samples
 const int SUNFASTAVERAGE = 10;
 const int SUNSLOWAVERAGE = 20;
-
-
 
 platformState_t platformState = PLATFORM_IDLE;
 sunState_t sunState = SUN_IDLE;
@@ -189,7 +187,7 @@ void platformTask(){
 
 void sunTask(){
   switch(sunState){
-    case SUN_IDLE:
+    case SUN_IDLE:s
       if(platformState==PLATFORM_ATEND){
         if(sunToBeginAvgSlow.getFastAverage()<SUNUPTHRESHOLD){
         sunState = SUN_WAITINGFORSUNDOWN;
@@ -224,18 +222,21 @@ void sunSensorTask(void){
         sunToBeginAvgFast.addValue(analogRead(LDR_ADC));
         pinMode(LDR_TOBEGIN_ON,INPUT);
         digitalWrite(LDR_TOEND_ON,0);
+        pinMode(LDR_TOEND_ON,OUTPUT);
         sunSensorState = SUNSENSOR_MEASURING_TOEND;      
        break;
       case SUNSENSOR_MEASURING_TOEND:
         sunToEndAvgFast.addValue(analogRead(LDR_ADC));
         pinMode(LDR_TOEND_ON,INPUT);
         digitalWrite(LDR_TOBEGIN_ON,0);
-        sunSensorState = SUNSENSOR_MEASURING_TOEND;      
+        pinMode(LDR_TOBEGIN_ON,OUTPUT);
+        sunSensorState = SUNSENSOR_MEASURING_TOBEGIN;      
        break;
       case SUNSENSOR_IDLE:
         sunMeasureTimeout = millis();
         pinMode(LDR_TOEND_ON,INPUT);
         digitalWrite(LDR_TOBEGIN_ON,0);
+        pinMode(LDR_TOBEGIN_ON,OUTPUT);        
         sunSensorState = SUNSENSOR_MEASURING_TOBEGIN;
         sunToBeginAvgFast.clear();
         sunToEndAvgFast.clear();
@@ -258,6 +259,8 @@ void pinSetup(){
   pinMode(MOTOR_ENA,OUTPUT);
   pinMode(LDR_TOBEGIN_ON,INPUT);
   pinMode(LDR_TOEND_ON,INPUT);
+  digitalWrite(LDR_TOBEGIN_ON,0);
+  digitalWrite(LDR_TOEND_ON,0);
 }
 
 void otaSetup(){
