@@ -30,6 +30,7 @@ const int SUNUPTHRESHOLD = 100;
 const int SUNMEASURESPEED = 100; //milliseconds between samples
 const int SUNFASTAVERAGE = 10;
 const int SUNSLOWAVERAGE = 20;
+const float SUN_DIFFERENCE_THRESHOLD = 10.0;
 
 platformState_t platformState = PLATFORM_IDLE;
 sunState_t sunState = SUN_IDLE;
@@ -187,31 +188,68 @@ void platformTask(){
 
 void sunTask(){
   switch(sunState){
-    case SUN_IDLE:s
-      if(platformState==PLATFORM_ATEND){
-        if(sunToBeginAvgSlow.getFastAverage()<SUNUPTHRESHOLD){
+    case SUN_MOVING_TOEND:
+      if(platformState == PLATFORM_ATEND){
         sunState = SUN_WAITINGFORSUNDOWN;
+      }
+      if(millis()-sunTimeout>2000){
+        sunTimeout = millis();
+        movePlatform(0);
+        sunState = SUN_MOVE_TIMEOUT;
+      }
+    break;
+    case SUN_MOVE_TIMEOUT:
+      if(millis()-sunTimeout>5000){
+        sunTimeout = millis();
+        if((sunToEndAvgSlow.getFastAverage()-sunToBeginAvgSlow.getFastAverage()>SUN_DIFFERENCE_THRESHOLD)){
+          movePlatform(1);
+          sunState = SUN_MOVING_TOEND;
+        }
+      }
+    break;
+    case SUN_IDLE:
+      switch(platformState){
+      case PLATFORM_ATEND:
+        if(sunToBeginAvgSlow.getFastAverage()<SUNUPTHRESHOLD){
+          sunState = SUN_WAITINGFORSUNDOWN;
         }else{
           sunState = SUN_MOVING_TOBEGIN;
         }
-      }else if(platformState==PLATFORM_ATBEGIN){
+        break;
+      case PLATFORM_ATBEGIN:
         if(sunToBeginAvgSlow.getFastAverage()<SUNUPTHRESHOLD){
-        sunState = SUN_MOVING_TOEND;
+          sunState = SUN_MOVING_TOEND;
         }else{
           sunState = SUN_WAITINGFORSUNRISE;
         }        
-      }else{
+      default:
         if(sunToBeginAvgSlow.getFastAverage()<SUNUPTHRESHOLD){
-          if(sunToBeginAvgSlow.getFastAverage()>sunToEndAvgSlow.getFastAverage()){
-            sunState = SUN_MOVING_TOBEGIN;
-          }else{
-            sunState = SUN_MOVING_TOEND;
-          }
-         }else{
+          sunState = SUN_MOVING_TOEND;
+        }else{
           sunState = SUN_MOVING_TOBEGIN;
-        }            
+        }
+      }            
+    break;
+    case SUN_WAITINGFORSUNRISE:
+      if(sunToBeginAvgSlow.getFastAverage()<SUNUPTHRESHOLD){
+        sunState = SUN_MOVING_TOEND;
       }
-    }  
+    break;
+    case SUN_WAITINGFORSUNDOWN:
+      if(sunToBeginAvgSlow.getFastAverage()>SUNUPTHRESHOLD){
+        sunState = SUN_MOVING_TOBEGIN;
+        movePlatform(-1);
+      }
+    break;
+    case SUN_MOVING_TOBEGIN:
+      if(platformState==PLATFORM_ATBEGIN){
+        sunState = SUN_WAITINGFORSUNRISE;
+      }
+    break;
+    default:
+      sunState = SUN_IDLE;
+    break;
+  }
 }
 
 void sunSensorTask(void){
