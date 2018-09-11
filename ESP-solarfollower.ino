@@ -11,8 +11,15 @@
 #include <ESPUI.h>
 #include "states.h"
 
-const char* ssid = "EAZHuis";
-const char* password = "HommeJan54";
+#include <ESPAsyncWebServer.h>
+#include <ESPAsyncWiFiManager.h>         //https://github.com/tzapu/WiFiManager
+
+AsyncWebServer server(80);
+DNSServer dns;
+
+
+const char* ssid = "Wouterap";
+const char* password = "zeltenistgeil";
 
 const char RESERVED_PINS[3] = {0,2};
 const char FREE_PINS[1] = {12};
@@ -54,17 +61,18 @@ void setup() {
   pinSetup();
   Serial.begin(115200);
   Serial.println("Booting");
-//  WiFiManager wifiManager;
-//  wifiManager.autoConnect("SolarRoof");
-  
-  WiFi.mode(WIFI_STA);
-  //WiFi.setHostname(ssid);  
-  WiFi.begin(ssid, password);
+  AsyncWiFiManager wifiManager(&server,&dns);
 
-    while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
+  wifiManager.autoConnect("SolarRoof");
+  
+//  WiFi.mode(WIFI_STA);
+  //WiFi.setHostname(ssid);  
+//  WiFi.begin(ssid, password);
+
+//    while (WiFi.status() != WL_CONNECTED) {
+//    delay(500);
+//    Serial.print(".");
+//  }
 
   
   otaSetup();
